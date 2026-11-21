@@ -18,7 +18,7 @@ Paths are lossless root-relative bytes joined with /: raw Unix bytes and WTF-8 o
 
 - ready: service=watcher. Emitted after registration.
 - paths: batch_id and a list of relative paths.
-- rescan: batch_id, reason, and optional paths for scoped errors. Unscoped errors, pathless Any/Other events, notify rescan flags and overflow request a whole-root rescan.
+- rescan: batch_id, reason, and optional paths. With paths, rescan those paths and everything below them: scoped errors, and in recursive mode the directories that appear under the root (reason new_directory). The backend watches a new directory only after reporting it, so entries made in it before then have no events of their own; knotify sends the rescan once the directory is watched. Unscoped errors, pathless Any/Other events, notify rescan flags and overflow request a whole-root rescan.
 - error: code and message, including registration failures.
 
 After subscribing, grant up to four credits with an ETF map containing version=1, type=credit, count=4. Return a credit only after accepting the corresponding batch. A bounded 4,096-event callback channel and a bounded coalescer retain a rescan requirement on overflow. Access-only noise is dropped; rename endpoints and meaningful metadata changes remain hints.

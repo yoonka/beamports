@@ -213,6 +213,7 @@ Events are output as JSON objects with the following structure:
 
 The watcher implements intelligent event handling:
 - **Metadata events** are filtered out to reduce noise
+- **New directories**: in recursive mode, the entries of a new directory are reported as created, including those made before the backend started watching it
 - **Access events** are ignored
 - **Rename events** are analyzed to detect deletions disguised as renames on macOS
 - **File existence** is checked to distinguish between actual renames and deletions
@@ -220,7 +221,7 @@ The watcher implements intelligent event handling:
 ## Dependencies
 
 - **clap** (v4.5.48): Command-line argument parsing
-- **notify** (v8.2.0): Cross-platform file system notification library
+- **notify** (v9.0.0): Cross-platform file system notification library
 - **serde_json** (v1.0.145): JSON serialization and deserialization
 
 ## Platform Support
@@ -228,7 +229,8 @@ The watcher implements intelligent event handling:
 - **Linux**: Uses inotify backend
 - **macOS**: Uses kqueue/FSEvents backend
 - **Windows**: Uses ReadDirectoryChangesW backend
-- **BSD**: Uses kqueue backend
+- **FreeBSD**: Uses inotify, so it needs FreeBSD 15.0 or later
+- **Other BSDs**: Use the kqueue backend
 
 ## Development
 

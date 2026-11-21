@@ -1,8 +1,9 @@
 # KnotifyEx
 
-## Lossless hint mode (1.1)
+## Lossless hint mode
 
-Use the matching knotify 1.1 executable for an acknowledged, bounded hint stream:
+Use a knotify executable of the same version (1.1 or later) for an
+acknowledged, bounded hint stream:
 
 ```elixir
 {:ok, watcher} = KnotifyEx.start_link(
@@ -15,8 +16,10 @@ receive do
     # Add paths to bounded intake; inspect disk and catalog asynchronously.
     accept_paths(paths)
     :ok = KnotifyEx.ack(watcher, id)
-  {:knotify, ^watcher, %{"type" => "rescan", "batch_id" => id}} ->
-    schedule_root_rescan()
+  {:knotify, ^watcher, %{"type" => "rescan", "batch_id" => id} = message} ->
+    # With "paths", rescan those paths and everything below them; without
+    # it, the whole root.
+    schedule_rescan(Map.get(message, "paths", :root))
     :ok = KnotifyEx.ack(watcher, id)
 end
 ```
@@ -27,7 +30,10 @@ Windows. Preserve them as opaque binaries. Readiness (`type: "ready"`) is cached
 and replayed to late subscribers. Registration/protocol errors are structured
 `type: "error"` messages. At most four path/rescan batches may be outstanding;
 acknowledge only after accepting work into bounded intake. Overflow requests a
-root rescan. Restarting a watcher also requires reconciliation.
+root rescan. Restarting a watcher also requires reconciliation. Since 1.2, a
+recursive watcher also sends a rescan with `"reason" => "new_directory"` for
+each directory that appears under the root, because entries made in it before
+knotify watched it have no events of their own.
 
 The default remains legacy JSON and `{:file_event, watcher, {path, events}}`.
 `:executable` also works with the legacy protocol, without changing `PATH`.

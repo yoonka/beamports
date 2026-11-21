@@ -10,7 +10,7 @@ use notify::{
 use std::{
     collections::BTreeSet,
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -103,6 +103,11 @@ pub fn run(
     });
     let mut credits = 0;
     let mut paths = BTreeSet::new();
+    // Directories that appeared under the root (yoonka/beamports#7). The backend
+    // watches a new directory only after reporting it, so entries made in it
+    // before then are never reported; a scoped rescan covers them.
+    let mut new_dirs = BTreeSet::new();
+    let mut new_dirs_watched = true;
     let mut rescan = false;
     let mut error: Option<String> = None;
     let mut error_paths = BTreeSet::new();
@@ -124,6 +129,9 @@ pub fn run(
         for _ in 0..512 {
             match rx.try_recv() {
                 Ok(Ok(event)) => {
+                    if recursive && new_directories(&root, &event, &mut new_dirs) {
+                        new_dirs_watched = false;
+                    }
                     absorb(&root, event, &mut paths, &mut rescan);
                 }
                 Ok(Err(e)) => {
@@ -152,15 +160,29 @@ pub fn run(
                 Err(TryRecvError::Disconnected) => return Err("watcher disconnected".into()),
             }
         }
+        if new_dirs.len() > CAPACITY {
+            new_dirs.clear();
+            rescan = true;
+        }
+        if !new_dirs_watched {
+            // The backend adds the watch of a new directory on its own thread,
+            // after it delivers the directory's event. That thread answers a
+            // request only between event batches, so once this returns the new
+            // directories are watched and a scan of them misses nothing.
+            let _ = watcher.watched_paths();
+            new_dirs_watched = true;
+        }
         if credits > 0
             && (rescan
                 || !error_paths.is_empty()
                 || paths.len() >= 128
+                || new_dirs.len() >= 128
                 || last.elapsed() >= Duration::from_millis(debounce.max(10)))
         {
             let value = if rescan {
                 paths.clear();
                 error_paths.clear();
+                new_dirs.clear();
                 rescan = false;
                 Some(wire::message(
                     "rescan",
@@ -176,19 +198,7 @@ pub fn run(
                     ],
                 ))
             } else if !error_paths.is_empty() {
-                let mut batch = vec![];
-                let mut size = 0;
-                while let Some(path) = error_paths.pop_first() {
-                    if size + path.len() > 256 * 1024 && !batch.is_empty() {
-                        error_paths.insert(path);
-                        break;
-                    }
-                    size += path.len();
-                    batch.push(Value::from(path));
-                    if batch.len() == 128 {
-                        break;
-                    }
-                }
+                let batch = take_batch(&mut error_paths);
                 Some(wire::message(
                     "rescan",
                     [
@@ -200,20 +210,18 @@ pub fn run(
                         ("paths", Value::List(batch)),
                     ],
                 ))
+            } else if !new_dirs.is_empty() {
+                let batch = take_batch(&mut new_dirs);
+                Some(wire::message(
+                    "rescan",
+                    [
+                        ("batch_id", seq.into()),
+                        ("reason", "new_directory".into()),
+                        ("paths", Value::List(batch)),
+                    ],
+                ))
             } else if !paths.is_empty() {
-                let mut batch = vec![];
-                let mut size = 0;
-                while let Some(path) = paths.pop_first() {
-                    if size + path.len() > 256 * 1024 && !batch.is_empty() {
-                        paths.insert(path);
-                        break;
-                    }
-                    size += path.len();
-                    batch.push(path.into());
-                    if batch.len() >= 128 {
-                        break;
-                    }
-                }
+                let batch = take_batch(&mut paths);
                 Some(wire::message(
                     "paths",
                     [("batch_id", seq.into()), ("paths", Value::List(batch))],
@@ -230,6 +238,76 @@ pub fn run(
         }
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Takes the paths of one message: at most 128 of them and 256 KiB.
+fn take_batch(set: &mut BTreeSet<Vec<u8>>) -> Vec<Value> {
+    let mut batch = vec![];
+    let mut size = 0;
+    while let Some(path) = set.pop_first() {
+        if size + path.len() > 256 * 1024 && !batch.is_empty() {
+            set.insert(path);
+            break;
+        }
+        size += path.len();
+        batch.push(Value::from(path));
+        if batch.len() == 128 {
+            break;
+        }
+    }
+    batch
+}
+
+/// Records the directories that an event creates or moves under the root, and
+/// returns whether it recorded any. A rename's old path no longer exists, so
+/// only its new path can be a directory.
+fn new_directories(root: &Path, event: &Event, new_dirs: &mut BTreeSet<Vec<u8>>) -> bool {
+    if !matches!(
+        event.kind,
+        EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+    ) {
+        return false;
+    }
+    let mut added = false;
+    for path in &event.paths {
+        if !path.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        if let Some(dir) = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(|p| native::relative(p).ok())
+            .filter(|dir| !dir.is_empty())
+        {
+            added |= insert_dir(new_dirs, dir);
+        }
+    }
+    added
+}
+
+/// Adds a directory unless one of its ancestors is pending, whose rescan covers
+/// it, and drops its pending descendants.
+fn insert_dir(dirs: &mut BTreeSet<Vec<u8>>, dir: Vec<u8>) -> bool {
+    let covered = dirs.contains(&dir)
+        || dir
+            .iter()
+            .enumerate()
+            .any(|(i, &b)| b == b'/' && dirs.contains(&dir[..i]));
+    if covered {
+        return false;
+    }
+    let mut prefix = dir.clone();
+    prefix.push(b'/');
+    let descendants: Vec<_> = dirs
+        .range(prefix.clone()..)
+        .take_while(|d| d.starts_with(&prefix))
+        .cloned()
+        .collect();
+    for d in descendants {
+        dirs.remove(&d);
+    }
+    dirs.insert(dir);
+    true
 }
 
 fn access_only(event: &Event) -> bool {
@@ -337,6 +415,39 @@ mod tests {
         }
         assert!(rescan);
         assert!(paths.len() <= CAPACITY);
+    }
+    #[test]
+    fn new_directories_are_rescanned_once_per_subtree() {
+        let mut dirs = BTreeSet::new();
+        assert!(insert_dir(&mut dirs, b"a/b".to_vec()));
+        assert!(insert_dir(&mut dirs, b"a/bc".to_vec()));
+        assert!(insert_dir(&mut dirs, b"a".to_vec()));
+        assert_eq!(dirs, BTreeSet::from([b"a".to_vec()]));
+        assert!(!insert_dir(&mut dirs, b"a/b/c".to_vec()));
+        assert!(!insert_dir(&mut dirs, b"a".to_vec()));
+        assert!(insert_dir(&mut dirs, b"ab".to_vec()));
+        assert_eq!(dirs.len(), 2);
+    }
+    #[test]
+    fn created_and_moved_in_directories_need_a_rescan_but_files_do_not() {
+        use notify::event::{ModifyKind, RenameMode};
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir(root.join("made")).unwrap();
+        std::fs::create_dir(root.join("moved")).unwrap();
+        std::fs::write(root.join("file"), "1").unwrap();
+        let mut dirs = BTreeSet::new();
+        let created = Event::new(EventKind::Create(CreateKind::Any)).add_path(root.join("made"));
+        assert!(new_directories(root, &created, &mut dirs));
+        let renamed = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(root.join("gone"))
+            .add_path(root.join("moved"));
+        assert!(new_directories(root, &renamed, &mut dirs));
+        let file = Event::new(EventKind::Create(CreateKind::Any)).add_path(root.join("file"));
+        assert!(!new_directories(root, &file, &mut dirs));
+        let modified = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(root.join("made"));
+        assert!(!new_directories(root, &modified, &mut dirs));
+        assert_eq!(dirs, BTreeSet::from([b"made".to_vec(), b"moved".to_vec()]));
     }
     #[test]
     fn access_time_noise_is_filtered_before_buffering_but_rescan_is_kept() {
