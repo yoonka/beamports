@@ -11,7 +11,7 @@ that reads one JSON request per line and writes one JSON reply per line.
 ```elixir
 def deps do
   [
-    {:jsonl_port, "~> 1.1"}
+    {:jsonl_port, "~> 1.2"}
   ]
 end
 ```
