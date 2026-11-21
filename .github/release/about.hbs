@@ -1,0 +1,22 @@
+Third-party software in this program, and its licenses.
+
+This program is part of beamports (https://github.com/yoonka/beamports),
+whose own license is in LICENSE. It includes the Rust crates listed below,
+some of which bundle C or C++ libraries (for example DuckDB or RocksDB).
+
+{{#each overview}}
+{{{name}}}: {{count}} crate(s)
+{{/each}}
+
+{{#each licenses}}
+--------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}
