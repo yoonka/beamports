@@ -1,45 +1,29 @@
 name: Release
 
+# A tag vX.Y.Z builds every archive and publishes them as the GitHub release
+# of that tag. Run by hand on a branch (workflow_dispatch), it builds the
+# same archives as workflow artifacts and publishes nothing: a dry run.
 on:
   push:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - name: Get version from tag
-        id: get_version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
-  build-linux:
-    name: Build Linux
-    needs: create-release
+  linux:
+    name: knotify for Linux (${{ matrix.target }})
     defaults:
       run:
         working-directory: knotify
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -51,51 +35,32 @@ jobs:
           - target: aarch64-unknown-linux-musl
             artifact_name: knotify-linux-aarch64-musl
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Build
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Prepare binary
+        run: cross build --release --locked --target ${{ matrix.target }}
+      - name: Package
         run: |
           cd target/${{ matrix.target }}/release
           strip knotify || true
-          tar czf ${{ matrix.artifact_name }}.tar.gz knotify
-          mv ${{ matrix.artifact_name }}.tar.gz ${{ github.workspace }}/
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+          tar czf "$GITHUB_WORKSPACE/${{ matrix.artifact_name }}.tar.gz" knotify
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ./${{ matrix.artifact_name }}.tar.gz
+          path: ${{ matrix.artifact_name }}.tar.gz
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.artifact_name }}.tar.gz
-          asset_name: ${{ matrix.artifact_name }}.tar.gz
-          asset_content_type: application/gzip
-
-  build-macos:
-    name: Build macOS
-    needs: create-release
+  macos:
+    name: knotify for macOS (${{ matrix.target }})
     defaults:
       run:
         working-directory: knotify
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-apple-darwin
@@ -103,101 +68,27 @@ jobs:
           - target: aarch64-apple-darwin
             artifact_name: knotify-macos-aarch64
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Prepare binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
         run: |
           cd target/${{ matrix.target }}/release
           strip knotify
-          tar czf ${{ matrix.artifact_name }}.tar.gz knotify
-          mv ${{ matrix.artifact_name }}.tar.gz ${{ github.workspace }}/
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+          tar czf "$GITHUB_WORKSPACE/${{ matrix.artifact_name }}.tar.gz" knotify
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ./${{ matrix.artifact_name }}.tar.gz
+          path: ${{ matrix.artifact_name }}.tar.gz
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.artifact_name }}.tar.gz
-          asset_name: ${{ matrix.artifact_name }}.tar.gz
-          asset_content_type: application/gzip
-
-  build-windows:
-    name: Build Windows
-    needs: create-release
-    defaults:
-      run:
-        working-directory: knotify
+  freebsd:
+    name: knotify for FreeBSD
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-pc-windows-gnu
-            artifact_name: knotify-windows-x86_64
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Prepare binary
-        run: |
-          cd target/${{ matrix.target }}/release
-          zip -j ${{ matrix.artifact_name }}.zip knotify.exe
-          mv ${{ matrix.artifact_name }}.zip ${{ github.workspace }}/
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ./${{ matrix.artifact_name }}.zip
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.artifact_name }}.zip
-          asset_name: ${{ matrix.artifact_name }}.zip
-          asset_content_type: application/zip
-
-  build-freebsd:
-    name: Build FreeBSD
-    needs: create-release
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - artifact_name: knotify-freebsd-x86_64
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       # Natively on 15.0, the first release with inotify(2), which knotify
       # uses on FreeBSD, so that the binary runs on every later 15.x. Rust
       # comes from rustup, as in the knotify workflow's 15.0 job.
@@ -217,51 +108,137 @@ jobs:
             cd knotify
             cargo build --release --locked
             strip target/release/knotify
-
-      - name: Prepare binary
+      - name: Package
         run: |
           cd knotify/target/release
-          tar czf ${{ matrix.artifact_name }}.tar.gz knotify
-          mv ${{ matrix.artifact_name }}.tar.gz ${{ github.workspace }}/
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+          tar czf "$GITHUB_WORKSPACE/knotify-freebsd-x86_64.tar.gz" knotify
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ./${{ matrix.artifact_name }}.tar.gz
+          name: knotify-freebsd-x86_64
+          path: knotify-freebsd-x86_64.tar.gz
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Every program, natively on Windows for x86_64 and ARM64. The C runtime
+  # is linked statically, so each program is one .exe that needs no Visual
+  # C++ Redistributable and can be copied anywhere.
+  windows:
+    name: ${{ matrix.program }} for Windows (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        program: [knotify, duckport, oxiport, tantiport]
+        arch: [x86_64, aarch64]
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: aarch64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.program }}
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.artifact_name }}.tar.gz
-          asset_name: ${{ matrix.artifact_name }}.tar.gz
-          asset_content_type: application/gzip
+          targets: ${{ matrix.target }}
+          components: llvm-tools
+      # --target keeps RUSTFLAGS away from build scripts and proc macros.
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Check that it needs no C runtime DLL
+        run: |
+          sysroot=$(cygpath -u "$(rustc --print sysroot)")
+          readobj="$sysroot/lib/rustlib/${{ matrix.target }}/bin/llvm-readobj.exe"
+          exe=target/${{ matrix.target }}/release/${{ matrix.program }}.exe
+          dlls=$("$readobj" --coff-imports "$exe" | sed -n 's/^ *Name: //p' | sort -u)
+          echo "$dlls"
+          if echo "$dlls" | grep -i -E '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt)'; then
+            echo "::error::${{ matrix.program }}.exe needs the C runtime DLLs above"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/exe/${{ matrix.arch }}"
+          cp "$exe" "$GITHUB_WORKSPACE/exe/${{ matrix.arch }}/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exe-${{ matrix.program }}-${{ matrix.arch }}
+          path: exe
 
-  checksums:
-    name: Generate Checksums
-    needs: [create-release, build-linux, build-macos, build-windows, build-freebsd]
+  # Zips each Windows executable with the licenses: LICENSE, and
+  # THIRD-PARTY-NOTICES.txt from cargo-about for the program's crates.
+  package-windows:
+    name: Package the Windows programs
+    needs: windows
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate checksums
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-about
         run: |
-          cd artifacts
-          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec sha256sum {} \; | sed 's|^\./||' | sed 's|.*/||' > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Upload checksums
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          v=0.9.3
+          name=cargo-about-$v-x86_64-unknown-linux-musl
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "https://github.com/EmbarkStudios/cargo-about/releases/download/$v/$name.tar.gz"
+          curl -sSfLO "https://github.com/EmbarkStudios/cargo-about/releases/download/$v/$name.tar.gz.sha256"
+          sha256sum -c "$name.tar.gz.sha256"
+          tar xzf "$name.tar.gz"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./artifacts/SHA256SUMS
-          asset_name: SHA256SUMS
-          asset_content_type: text/plain
+          pattern: exe-*
+          path: exe
+          merge-multiple: true
+      - name: Package
+        run: |
+          set -eu
+          mkdir dist
+          for program in knotify duckport oxiport tantiport; do
+            (cd "$program" && cargo fetch --locked \
+              --target x86_64-pc-windows-msvc --target aarch64-pc-windows-msvc)
+            cargo about generate --locked \
+              --manifest-path "$program/Cargo.toml" \
+              -c .github/release/about.toml \
+              -o "notices-$program.txt" .github/release/about.hbs
+            for arch in x86_64 aarch64; do
+              dir="pkg/$program-$arch"
+              mkdir -p "$dir"
+              cp "exe/$arch/$program.exe" "$dir/"
+              cp LICENSE "$dir/LICENSE"
+              cp "notices-$program.txt" "$dir/THIRD-PARTY-NOTICES.txt"
+              (cd "$dir" && zip -q -X "$GITHUB_WORKSPACE/dist/$program-windows-$arch.zip" \
+                "$program.exe" LICENSE THIRD-PARTY-NOTICES.txt)
+            done
+          done
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zips
+          path: dist
+
+  publish:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, freebsd, package-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cd assets
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "Release $GITHUB_REF_NAME" --notes "" \
+            *.tar.gz *.zip SHA256SUMS
