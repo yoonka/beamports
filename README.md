@@ -63,8 +63,8 @@ Every project in this repository has the same version, and a release is a
 tag `vX.Y.Z` of the whole repository.
 
 - The release workflow builds knotify for Linux, macOS, Windows and
-  FreeBSD, and attaches the archives and their checksums to the GitHub
-  release.
+  FreeBSD (15.0 or later), and attaches the archives and their checksums
+  to the GitHub release.
 - duckport, oxiport and tantiport are not released as binaries; build them
   from source as described above.
 - The Elixir packages are published to Hex from their directories with

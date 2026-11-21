@@ -73,7 +73,7 @@ Add `knotify_ex` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:knotify_ex, "~> 1.1"}
+    {:knotify_ex, "~> 1.2"}
   ]
 end
 ```
