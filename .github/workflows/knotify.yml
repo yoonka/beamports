@@ -21,18 +21,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked
   freebsd-zfs:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The newest 15.x, with Rust from packages: they are built for the
+          # oldest supported 15.x, which the newest one runs, but not always
+          # the other way.
+          - release: '15'
+            rust: pkg install -y rust
+          # 15.0, the first release with inotify(2), which knotify uses on
+          # FreeBSD. Rust comes from rustup, for the reason above; the
+          # release workflow builds the FreeBSD binary the same way.
+          - release: '15.0'
+            rust: >-
+              fetch -o /tmp/rustup-init
+              https://static.rust-lang.org/rustup/dist/x86_64-unknown-freebsd/rustup-init
+              && chmod +x /tmp/rustup-init
+              && /tmp/rustup-init -y --profile minimal
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: vmactions/freebsd-vm@v1.5.9
         with:
-          # The newest 15.x: packages are built for the oldest supported
-          # 15.x, which the newest one runs, but not always the other way.
-          release: '15'
+          release: ${{ matrix.release }}
           mem: 4096
-          prepare: pkg install -y rust
+          prepare: ${{ matrix.rust }}
           run: |
             set -eu
+            if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
             cd knotify
             kldload zfs || true
             truncate -s 1G /tmp/knotify-test.vdev

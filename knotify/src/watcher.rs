@@ -408,6 +408,29 @@ impl Watchman {
         Ok(())
     }
 
+    /// Reports the entries of a new directory as created (yoonka/beamports#7).
+    /// The backend watches a new directory only after reporting it, so entries
+    /// made in it before then have no events of their own. Its subdirectories
+    /// are listed when their own create events arrive: the backend reports the
+    /// ones it finds while it watches them. An entry made after the watch can
+    /// be reported twice; the event cache drops most of those.
+    fn report_entries(&self, dir: &Path) -> Result<()> {
+        use notify::event::CreateKind;
+
+        let Ok(entries) = dir.read_dir() else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let kind = match entry.file_type() {
+                Ok(file_type) if file_type.is_dir() => CreateKind::Folder,
+                Ok(_) => CreateKind::File,
+                Err(_) => continue,
+            };
+            self.handle_event(Event::new(EventKind::Create(kind)).add_path(entry.path()))?;
+        }
+        Ok(())
+    }
+
     pub fn run(&self) -> Result<()> {
         let (tx, rx) = mpsc::channel::<Result<Event>>();
 
@@ -425,13 +448,44 @@ impl Watchman {
 
         for res in rx {
             match res {
-                Ok(event) => self.handle_event(event)?,
+                Ok(event) => {
+                    let created = if self.config.recursive {
+                        created_directories(&event)
+                    } else {
+                        Vec::new()
+                    };
+                    if !created.is_empty() {
+                        // The backend adds the watch of a new directory on its
+                        // own thread, after it delivers the directory's event.
+                        // That thread answers a request only between event
+                        // batches, so once this returns the new directories are
+                        // watched and a listing of them misses nothing.
+                        let _ = watcher.watched_paths();
+                    }
+                    self.handle_event(event)?;
+                    for dir in created {
+                        self.report_entries(&dir)?;
+                    }
+                }
                 Err(e) => eprintln!("watch error: {:?}", e),
             }
         }
 
         Ok(())
     }
+}
+
+/// The directories that a create event reports.
+fn created_directories(event: &Event) -> Vec<PathBuf> {
+    if !matches!(event.kind, EventKind::Create(_)) {
+        return Vec::new();
+    }
+    event
+        .paths
+        .iter()
+        .filter(|path| path.symlink_metadata().is_ok_and(|m| m.is_dir()))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
